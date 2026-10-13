@@ -1,6 +1,6 @@
-# caldir v0.14.6 release assets. Regenerate with: just bump-caldir <tag>
-bfd00ae30b0e8e2207b62d1c073f60162185dffebc729eab94cfe89c54fb6418  caldir-aarch64-apple-darwin.tar.gz
-142338648471ce9977752bfa4b64259df6c4386f520afcb4b0bca2e632ba69d1  caldir-aarch64-unknown-linux-musl.tar.gz
-ec84e05daf1f71e53d5fe870c43860a4e970bff093210041dee89e4be6a5417e  caldir-x86_64-apple-darwin.tar.gz
-c0b2634949529e3641a8a19eda7d5f0270776da98d189ed9dc14ef6f8e4e370e  caldir-x86_64-pc-windows-msvc.zip
-ebc295e0da06f06a394aa894b994524936d08dc6b9ab8c4f22e54dfc1e0ac296  caldir-x86_64-unknown-linux-musl.tar.gz
+# caldir v0.14.8 release assets. Regenerate with: just bump-caldir <tag>
+246c08848b380095e67037efa9944a33bcc20a6de23789914c882992aa53f4f8  caldir-aarch64-apple-darwin.tar.gz
+dacf9a9fec2dee9ca99c1704270c111acbe461fb3ac7660e93e6c1cdb8e3afc6  caldir-aarch64-unknown-linux-musl.tar.gz
+0217106f4bcec4b9f5a532c66bcbc2e5f84a61dac6433f86201547d41edcf727  caldir-x86_64-apple-darwin.tar.gz
+94c582ee54a1c2317166fc580f23c4dd25c2c40f8282dad9584b64e34431db60  caldir-x86_64-pc-windows-msvc.zip
+420e7c193dcecb092b5f004670f64ae99070fd4a1b145553e0614bb9740a540b  caldir-x86_64-unknown-linux-musl.tar.gz

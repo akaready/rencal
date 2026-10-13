@@ -123,7 +123,7 @@ notarize: ensure-providers
 ensure-providers:
   scripts/install-caldir-providers.sh
 
-# Move the provider binaries to a caldir release, e.g. `just bump-caldir v0.14.1`.
+# Move caldir-core and the provider binaries to a caldir release, e.g. `just bump-caldir v0.14.1`.
 bump-caldir tag:
   scripts/bump-caldir.sh {{tag}}
 

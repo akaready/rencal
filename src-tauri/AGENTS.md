@@ -12,4 +12,4 @@
 
 - Calendars/events are read from the local caldir directory via `caldir-core`.
 - Provider credential field IDs come from the caldir provider binaries.
-- `caldir-core` and the provider binaries are pinned separately in `Cargo.toml`. Update the crate normally; change the provider release with `just bump-caldir <tag>`, which regenerates `caldir-providers.sha256`. Never edit the tag or checksum file by hand.
+- `caldir-core` and the provider binaries are pinned separately in `Cargo.toml`. Move both to a caldir release with `just bump-caldir <tag>`, which pins the crate to that release's caldir-core version and regenerates `caldir-providers.sha256`. Never edit the tag or checksum file by hand.
