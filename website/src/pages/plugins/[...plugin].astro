@@ -33,8 +33,6 @@ const sheetId = (plugin: PluginIndexEntry) => `plugin-sheet-${plugin.id}`
 const LIST_TITLE = "renCal Plugins: community themes for renCal"
 const titleOf = (plugin: PluginIndexEntry) =>
   `${plugin.name}: renCal plugin by ${authorOf(plugin.repo)}`
-// The site is redeployed whenever the index changes, so build time is when the list was refreshed.
-const builtAt = new Date()
 ---
 
 <BaseLayout
@@ -48,7 +46,11 @@ const builtAt = new Date()
   >
     <header class="flex max-w-3xl flex-col gap-3">
       <h1 class="text-3xl">Plugins</h1>
-      <p class="text-pretty">Browse community-built plugins for renCal.</p>
+      <p class="text-pretty">
+        Community plugins published on GitHub, discovered automatically from the
+        <code>rencal-plugin</code> topic.
+        <a href="/docs/plugins/create/" class="underline hover:text-foreground">Build your own</a>.
+      </p>
     </header>
 
     <div class="flex flex-col gap-3">
@@ -77,10 +79,7 @@ const builtAt = new Date()
           {plugins.length}
           {plugins.length === 1 ? "plugin" : "plugins"}
         </span>
-        · updated
-        <time id="plugin-updated" datetime={builtAt.toISOString()}>
-          {builtAt.toISOString().slice(0, 10)}
-        </time>
+        · checked hourly
       </p>
     </div>
 
@@ -336,16 +335,5 @@ const builtAt = new Date()
       event.preventDefault()
       search.focus()
     })
-
-    const updated = document.getElementById("plugin-updated") as HTMLTimeElement
-    const minutes = Math.max(0, Math.round((Date.now() - Date.parse(updated.dateTime)) / 60_000))
-    updated.textContent =
-      minutes < 1
-        ? "just now"
-        : minutes < 60
-          ? `${minutes}m ago`
-          : minutes < 60 * 24
-            ? `${Math.round(minutes / 60)}h ago`
-            : `${Math.round(minutes / (60 * 24))}d ago`
   </script>
 </BaseLayout>
