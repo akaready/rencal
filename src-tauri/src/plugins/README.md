@@ -1,6 +1,6 @@
 # Plugins
 
-renCal plugins contribute CSS themes and calendar providers. Themes are data. A provider is a program: renCal downloads a `caldir-provider-<slug>` binary from the plugin's GitHub release and runs it to sync accounts, with the user's permissions.
+renCal plugins contribute CSS themes, calendar providers and views. Themes are data. A provider is a program: renCal downloads a `caldir-provider-<slug>` binary from the plugin's GitHub release and runs it to sync accounts, with the user's permissions. A view is a script that renCal runs inside the app window, with the same access as renCal's own code.
 
 A plugin is a GitHub repository with a `rencal-plugin.toml` manifest and its contributed files:
 
@@ -75,6 +75,56 @@ The binary is registered with renCal only, never put on `PATH`. When several bin
 In a local checkout, renCal runs `bin/caldir-provider-<slug>` from the checkout if it exists, so a developer can symlink their build output there. Without it, the plugin contributes only the name and icon, and the binary comes from `PATH`.
 
 The catalog only lists a provider when its release has at least one matching asset with a digest, and labels such plugins as calendar providers.
+
+## Views
+
+```toml
+id = "t4t5.board"
+name = "Board"
+description = "A board view with columns for yesterday, today, tomorrow and the rest of the week."
+min_rencal_version = "0.9.0"
+
+[[contributes.views]]
+id = "board"
+name = "Board"
+script = "dist/board.js"
+css = "dist/board.css"
+```
+
+- `script` is a relative `.js` path to a single-file ES module whose default export is the view's React component. The component takes no props and reads everything through `@rencomputer/rencal-sdk`.
+- The script may import only the modules renCal shares with it: `react`, `react-dom`, `react/jsx-runtime`, `@js-temporal/polyfill` and `@rencomputer/rencal-sdk`. `react-dom` is the shared entry only (`createPortal`, `flushSync`); views render inside renCal's root and never create their own. Everything else must be bundled into the one file; relative imports (code-split chunks) fail to load.
+- `css` is optional and is injected while the plugin is installed. renCal only generates Tailwind utilities for its own source, so a view compiles its own against renCal's design tokens.
+- The view's id is `<plugin-id>/<view-id>`, which is what the view dropdown, the command palette and the stored active view use.
+
+The script and CSS are build output, so they stay out of git and ship as assets of a stable GitHub release, as Obsidian plugins do. renCal matches each `script` and `css` path to the release asset with the same file name (`dist/board.js` to `board.js`), verifies it against GitHub's `sha256` digest and records the digest in `plugins.lock`, so a restore installs the same bytes or fails. Two view files with the same file name cannot both come from a release. A file the release does not attach comes from the release commit, and a plugin without a release installs from the default branch, so committing the built files still works. Scripts may be up to 2 MiB.
+
+A local checkout loads its built files from disk, so a personal view needs no repository or release.
+
+#### Releasing views
+
+[rencal-view-board's release workflow](https://github.com/t4t5/rencal-view-board/blob/main/.github/workflows/release.yml) shows the setup: pushing a `v*` tag builds the plugin, attests the build's provenance and publishes a release with `dist/*` attached, which ships the update.
+
+### Building views
+
+[`@rencomputer/rencal-sdk`](https://www.npmjs.com/package/@rencomputer/rencal-sdk) holds the plugin API's types and a build command that takes care of everything above, so a view plugin needs no build configuration:
+
+```json
+{
+  "scripts": { "build": "rencal-sdk build", "dev": "rencal-sdk dev" },
+  "devDependencies": { "@rencomputer/rencal-sdk": "^0.1.0", "@types/react": "^19.2.0" }
+}
+```
+
+```json
+// tsconfig.json
+{ "extends": "@rencomputer/rencal-sdk/tsconfig.json" }
+```
+
+`rencal-sdk build` type-checks the plugin and builds each view in `rencal-plugin.toml` from `src/<view-id>.tsx` (or `src/index.tsx` when there is one view) to the `script` and `css` paths it declares, leaving the shared modules out. When a view declares `css`, Tailwind utilities for its classes are generated against renCal's tokens; plain CSS files the view imports are added to the same stylesheet. `rencal-sdk dev` rebuilds on every change. A `vite.config.ts` in the plugin is merged in, for extra Vite plugins.
+
+The package lives in `packages/sdk` in this repository; `just sdk` regenerates its types and tokens from `src/sdk`, and `just publish-sdk` publishes it. See [rencal-view-board](https://github.com/t4t5/rencal-view-board) for a complete plugin.
+
+## Declaring plugins
 
 Declare installed plugins by repository in `~/.config/rencal/plugins.toml`:
 

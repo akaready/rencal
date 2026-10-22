@@ -108,7 +108,7 @@ describe("global CSS contract", () => {
     }
 
     expect(source).toMatch(
-      /:where\([\s\S]*?\[data-view="month"\]\[data-kind="timed"\][\s\S]*?\[data-view="agenda"\]\[data-kind="timed"\][\s\S]*?\[data-view="board"\][\s\S]*?\)\[data-selected\]\s*\{[^}]*background:\s*var\(--selected\);[^}]*color:\s*var\(--selected-foreground\);[^}]*\}/,
+      /:where\([\s\S]*?\[data-view="month"\]\[data-kind="timed"\][\s\S]*?\[data-view="agenda"\]\[data-kind="timed"\][\s\S]*?\)\[data-selected\]\s*\{[^}]*background:\s*var\(--selected\);[^}]*color:\s*var\(--selected-foreground\);[^}]*\}/,
     )
   })
 
@@ -134,6 +134,10 @@ describe("global CSS contract", () => {
     expect(css).toMatch(/\.text-sm[^{]*\{[^}]*font-size:\s*var\(--text-sm\)/s)
     expect(css).toMatch(/@layer components\s*\{[\s\S]*?\[data-typography="button"\]\s*\{/)
     expect(css).toContain("@layer theme, base, components, utilities")
+  })
+
+  it("orders plugin view CSS below host utilities", () => {
+    expect(source).toMatch(/^@layer theme, base, components, plugins, utilities;$/m)
   })
 
   it("uses explicit typography roles instead of generic global classes", () => {

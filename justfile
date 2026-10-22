@@ -42,6 +42,20 @@ deploy-web:
 gen-types:
   cargo run --example gen_types
 
+# Generate the @rencomputer/rencal-sdk package (types and Tailwind tokens for view plugins)
+sdk:
+  node scripts/build-sdk.mjs
+
+# Publish @rencomputer/rencal-sdk to npm at the version in packages/sdk/package.json
+publish-sdk: sdk
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ -n "$(git status --porcelain -- packages/sdk)" ]]; then
+    echo "packages/sdk has uncommitted or regenerated changes; commit them first." >&2
+    exit 1
+  fi
+  cd packages/sdk && npm publish
+
 # Test production version of app (needs build first)
 start:
   #!/usr/bin/env bash
@@ -66,7 +80,7 @@ typecheck:
   pnpm lint
   pnpm find:unused-exports
 
-# Run frontend and Rust tests, and verify both generated IPC contracts are current
+# Run frontend and Rust tests, and verify the generated IPC contracts and SDK are current
 test:
   pnpm test
   cargo test --workspace --manifest-path src-tauri/Cargo.toml

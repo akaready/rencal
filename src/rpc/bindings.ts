@@ -18,7 +18,7 @@ export type Calendar = { slug: string; name: string | null; color: string | null
  */
 email: string | null; read_only: boolean | null }
 
-export type CalendarEvent = { id: string; recurring_event_id: string | null; summary: string; description: string | null; location: string | null; url: string | null; start: RpcEventTime; end: RpcEventTime; status: EventStatus; recurrence: RpcRecurrence | null; master_recurrence: RpcRecurrence | null; reminders: number[]; organizer: EventAttendee | null; attendees: EventAttendee[]; conference: EventConference | null; calendar_slug: string; color: string | null; 
+export type CalendarEvent = { id: string; recurring_event_id: string | null; summary: string; description: string | null; location: string | null; url: string | null; start: RpcEventTime; end: RpcEventTime; status: EventStatus; availability: EventAvailability; recurrence: RpcRecurrence | null; master_recurrence: RpcRecurrence | null; reminders: number[]; organizer: EventAttendee | null; attendees: EventAttendee[]; conference: EventConference | null; calendar_slug: string; color: string | null; 
 /**
  * RFC 3339 timestamp of the event's last modification (DTSTAMP/LAST-MODIFIED).
  * Used by the frontend to cheaply detect content changes for reload dedup.
@@ -37,7 +37,11 @@ export type ContributionKind = "theme" |
 /**
  * Runs a provider binary on the user's computer.
  */
-"provider"
+"provider" | 
+/**
+ * Runs a script inside renCal.
+ */
+"view"
 
 /**
  * Input for creating an event
@@ -53,6 +57,11 @@ export type CredentialFieldInput = { id: string; value: string }
 export type CredentialsConnectResult = { status: "done"; calendars: Calendar[] } | { status: "needs_credentials"; fields: ProviderField[] }
 
 export type EventAttendee = { name: string | null; email: string; response_status: ResponseStatus | null }
+
+/**
+ * Whether the event blocks time (TRANSP: OPAQUE) or leaves it free (TRANSPARENT).
+ */
+export type EventAvailability = "busy" | "free"
 
 export type EventConference = { status: "requested"; provider: ConferenceProvider } | { status: "live"; provider: ConferenceProvider; url: string }
 
@@ -79,6 +88,14 @@ export type ExternalThemeFonts = { fonts: ExternalThemeFont[] }
 export type ExternalThemeSource = { kind: "loose" } | { kind: "plugin"; id: string }
 
 export type ExternalThemesSnapshot = { themes: ExternalTheme[]; errors: ExternalThemeError[] }
+
+export type ExternalView = { 
+/**
+ * `<plugin-id>/<view-id>`.
+ */
+id: string; plugin_id: string; name: string; script: string; css: string | null }
+
+export type ExternalViewsSnapshot = { views: ExternalView[] }
 
 /**
  * RPC mirror of `rencal_config::FirstDayOfWeek` (the config crate stays free
@@ -117,7 +134,7 @@ export type PluginCatalogEntry = { id: string; name: string; repo: string; descr
 
 export type PluginFontInspection = { family: string; file: string; weight: number; style: FontStyle }
 
-export type PluginInspection = { id: string; name: string; description: string; repo: string; version: string; min_rencal_version: string; compatible: boolean; themes: PluginThemeInspection[]; fonts: PluginFontInspection[]; providers: PluginProviderInspection[] }
+export type PluginInspection = { id: string; name: string; description: string; repo: string; version: string; min_rencal_version: string; compatible: boolean; themes: PluginThemeInspection[]; fonts: PluginFontInspection[]; providers: PluginProviderInspection[]; views: PluginViewInspection[] }
 
 export type PluginInstallLink = { repo: string }
 
@@ -128,6 +145,8 @@ export type PluginProviderInspection = { slug: string; name: string;
 asset: string | null }
 
 export type PluginThemeInspection = { id: string; name: string; appearance: Appearance }
+
+export type PluginViewInspection = { id: string; name: string }
 
 export type ProviderConnectInfo = { step: ProviderConnectStepKind; fields: ProviderField[]; instructions: string | null }
 
@@ -240,7 +259,7 @@ export type UpdateEventInput = { id: string; calendar_slug: string;
  */
 new_calendar_slug: string | null; summary: string; description: string | null; location: string | null; url: string | null; start: RpcEventTime; end: RpcEventTime; recurrence: RpcRecurrence | null; reminders: number[]; attendees: EventAttendee[]; conference: EventConference | null }
 
-const ARGS_MAP = { 'caldir':'{"check_provider_connection":["provider_name","account"],"connect_provider":["provider_name"],"connect_provider_with_credentials":["provider_name","credentials"],"create_event":["input"],"create_local_calendar":["name","color"],"delete_account":["provider_name","account"],"delete_calendar":["calendar_slug"],"delete_event":["calendar_slug","event_id"],"delete_recurring_series":["calendar_slug","uid"],"discard":[],"find_event":["uid","recurrence_id"],"get_caldir_settings":[],"get_event":["calendar_slug","event_id"],"get_provider_connect_info":["provider_name"],"list_calendars":[],"list_contacts":[],"list_events":["calendar_slugs","start","end"],"list_invites":["calendar_slugs"],"list_providers":[],"rename_calendar":["calendar_slug","name"],"rsvp":["calendar_slug","event_id","response"],"search_events":["calendar_slugs","query"],"set_calendar_color":["calendar_slug","color"],"set_calendar_dir":["path"],"set_default_calendar":["slug"],"set_default_reminders":["minutes"],"set_time_format":["time_format"],"split_recurring_series_at":["input"],"sync":["allow_mass_delete"],"sync_preview":[],"update_event":["input"]}', 'config':'{"get_auto_sync_enabled":[],"get_first_day_of_week":[],"get_groups":[],"get_notifications_enabled":[],"get_show_week_numbers":[],"get_theme":[],"set_auto_sync_enabled":["enabled"],"set_first_day_of_week":["day"],"set_groups":["groups"],"set_notifications_enabled":["enabled"],"set_show_week_numbers":["show"],"set_theme":["settings"]}', 'omarchy':'{"get_colors":[]}', 'platform':'{"needs_native_decorations":[],"take_pending_event_links":[],"take_pending_plugin_install":[]}', 'plugins':'{"catalog":[],"install":["repo"],"list":[],"uninstall":["id"]}', 'themes':'{"list_external":[],"load_fonts":["theme_id"]}' }
+const ARGS_MAP = { 'caldir':'{"check_provider_connection":["provider_name","account"],"connect_provider":["provider_name"],"connect_provider_with_credentials":["provider_name","credentials"],"create_event":["input"],"create_local_calendar":["name","color"],"delete_account":["provider_name","account"],"delete_calendar":["calendar_slug"],"delete_event":["calendar_slug","event_id"],"delete_recurring_series":["calendar_slug","uid"],"discard":[],"find_event":["uid","recurrence_id"],"get_caldir_settings":[],"get_event":["calendar_slug","event_id"],"get_provider_connect_info":["provider_name"],"list_calendars":[],"list_contacts":[],"list_events":["calendar_slugs","start","end"],"list_invites":["calendar_slugs"],"list_providers":[],"rename_calendar":["calendar_slug","name"],"rsvp":["calendar_slug","event_id","response"],"search_events":["calendar_slugs","query"],"set_calendar_color":["calendar_slug","color"],"set_calendar_dir":["path"],"set_default_calendar":["slug"],"set_default_reminders":["minutes"],"set_time_format":["time_format"],"split_recurring_series_at":["input"],"sync":["allow_mass_delete"],"sync_preview":[],"update_event":["input"]}', 'config':'{"get_auto_sync_enabled":[],"get_first_day_of_week":[],"get_groups":[],"get_notifications_enabled":[],"get_show_week_numbers":[],"get_theme":[],"set_auto_sync_enabled":["enabled"],"set_first_day_of_week":["day"],"set_groups":["groups"],"set_notifications_enabled":["enabled"],"set_show_week_numbers":["show"],"set_theme":["settings"]}', 'omarchy':'{"get_colors":[]}', 'platform':'{"needs_native_decorations":[],"take_pending_event_links":[],"take_pending_plugin_install":[]}', 'plugins':'{"catalog":[],"install":["repo"],"list":[],"uninstall":["id"]}', 'themes':'{"list_external":[],"load_fonts":["theme_id"]}', 'views':'{"list_external":[]}' }
 export type Router = { "caldir": {check_provider_connection: (providerName: string, account: string) => Promise<null>, 
 connect_provider: (providerName: string) => Promise<Calendar[]>, 
 connect_provider_with_credentials: (providerName: string, credentials: CredentialFieldInput[]) => Promise<CredentialsConnectResult>, 
@@ -293,7 +312,8 @@ install: (repo: string) => Promise<PluginInspection>,
 list: () => Promise<InstalledPlugins>, 
 uninstall: (id: string) => Promise<null>},
 "themes": {list_external: () => Promise<ExternalThemesSnapshot>, 
-load_fonts: (themeId: string) => Promise<ExternalThemeFonts>} };
+load_fonts: (themeId: string) => Promise<ExternalThemeFonts>},
+"views": {list_external: () => Promise<ExternalViewsSnapshot>} };
 
 
 export const createTauRPCProxy = () => createProxy<Router>(ARGS_MAP)

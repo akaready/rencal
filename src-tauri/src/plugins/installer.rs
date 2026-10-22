@@ -1,7 +1,8 @@
 //! GitHub-backed installation for theme and provider packages.
 //!
-//! Package files come from a pinned commit; provider binaries come from the
-//! matching release's assets and are verified against their sha256 digest.
+//! Package files come from a pinned commit; provider binaries, and view files
+//! the release attaches, come from the matching release's assets and are
+//! verified against their sha256 digest.
 //! Downloads are bounded and written to a staging directory. Package swaps,
 //! declarations, and lockfile updates are serialized so a failed install or
 //! update can put the previous state back before returning.
@@ -25,16 +26,18 @@ use tokio::sync::Mutex;
 #[cfg(unix)]
 use super::LocalLockEntry;
 use super::{
-    Appearance, ContributionKind, FontStyle, LockedProviderAsset, MANIFEST_FILE, PluginDeclaration,
-    PluginLockEntry, PluginLockFile, PluginManifest, PluginsFile, ProviderContribution,
-    load_declared_plugins, load_plugin_lock_file, plugins_dir, plugins_file_path,
-    plugins_lock_path, provider_binary_path, release_asset_sha256, running_app_version, save_plugin_lock_file, save_plugins_file,
-    scan_packages, validate_manifest, validate_manifest_owner, validate_package_id,
+    Appearance, ContributionKind, FontStyle, LockedProviderAsset, LockedViewAsset, MANIFEST_FILE,
+    PluginDeclaration, PluginLockEntry, PluginLockFile, PluginManifest, PluginsFile,
+    ProviderContribution, load_declared_plugins, load_plugin_lock_file, plugins_dir,
+    plugins_file_path, plugins_lock_path, provider_binary_path, release_asset_sha256,
+    running_app_version, save_plugin_lock_file, save_plugins_file, scan_packages,
+    validate_manifest, validate_manifest_owner, validate_package_id, view_asset_name,
 };
 
 const RELEASE_RESPONSE_LIMIT: usize = 1024 * 1024;
 const MANIFEST_LIMIT: usize = 128 * 1024;
 const CSS_FILE_LIMIT: usize = 1024 * 1024;
+const SCRIPT_FILE_LIMIT: usize = 2 * 1024 * 1024;
 pub(crate) const FONT_FILE_LIMIT: usize = 1024 * 1024;
 pub(super) const ICON_FILE_LIMIT: usize = 64 * 1024;
 /// Local previews travel inline on every plugin list, so stay well below the catalog's 10 MiB.
@@ -207,6 +210,12 @@ pub struct PluginProviderInspection {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Type)]
+pub struct PluginViewInspection {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Type)]
 pub struct PluginInspection {
     pub id: String,
     pub name: String,
@@ -219,6 +228,7 @@ pub struct PluginInspection {
     pub themes: Vec<PluginThemeInspection>,
     pub fonts: Vec<PluginFontInspection>,
     pub providers: Vec<PluginProviderInspection>,
+    pub views: Vec<PluginViewInspection>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -283,6 +293,8 @@ struct ResolvedPackage {
     commit: String,
     tag: Option<String>,
     providers: Vec<ResolvedProvider>,
+    /// View files the release attaches, installed instead of the commit's.
+    views: Vec<LockedViewAsset>,
 }
 
 struct ResolvedProvider {
@@ -315,6 +327,7 @@ impl ResolvedPackage {
                 .iter()
                 .filter_map(|provider| provider.asset.clone())
                 .collect(),
+            views: self.views.clone(),
         }
     }
 }
@@ -322,6 +335,7 @@ impl ResolvedPackage {
 #[derive(Clone, Copy)]
 enum PackageFile {
     Css,
+    Script,
     Font,
     Icon,
 }
@@ -355,6 +369,8 @@ enum MissingResponse {
     Release,
     Commit,
     PackageFile(String),
+    /// A view file that is neither a release asset nor in the commit.
+    ViewFile(String),
     ReleaseAsset(String),
 }
 
@@ -484,6 +500,7 @@ impl PluginManager {
             let contributions = [
                 (!package.themes.is_empty()).then_some(ContributionKind::Theme),
                 (!package.providers.is_empty()).then_some(ContributionKind::Provider),
+                (!package.views.is_empty()).then_some(ContributionKind::View),
             ]
             .into_iter()
             .flatten()
@@ -1245,6 +1262,7 @@ impl PluginManager {
                 })
                 .collect::<Result<_, PluginInstallError>>()?;
             package.set_providers(providers);
+            package.views = release_view_assets(&release, &package.manifest)?;
             return Ok(package);
         }
 
@@ -1294,6 +1312,17 @@ impl PluginManager {
             })
             .collect::<Result<_, PluginInstallError>>()?;
         package.set_providers(providers);
+        if let Some(view) = entry
+            .views
+            .iter()
+            .find(|view| !view_files(&package.manifest).any(|file| file == view.file))
+        {
+            return Err(PluginInstallError::invalid_package(format!(
+                "locked view file {:?} is not declared by the manifest",
+                view.file
+            )));
+        }
+        package.views = entry.views.clone();
         Ok(package)
     }
 
@@ -1386,6 +1415,15 @@ impl PluginManager {
                 })
                 .collect(),
             providers: Vec::new(),
+            views: manifest
+                .contributes
+                .views
+                .iter()
+                .map(|view| PluginViewInspection {
+                    id: view.id.clone(),
+                    name: view.name.clone(),
+                })
+                .collect(),
         };
         Ok(ResolvedPackage {
             inspection,
@@ -1394,6 +1432,7 @@ impl PluginManager {
             commit,
             tag: release_tag.map(str::to_owned),
             providers: Vec::new(),
+            views: Vec::new(),
         })
     }
 
@@ -1414,6 +1453,7 @@ impl PluginManager {
     /// nothing to install.
     fn require_installable(&self, package: &ResolvedPackage) -> Result<(), PluginInstallError> {
         if !package.manifest.contributes.themes.is_empty()
+            || !package.manifest.contributes.views.is_empty()
             || package
                 .providers
                 .iter()
@@ -1424,7 +1464,7 @@ impl PluginManager {
         let provider = &package
             .providers
             .first()
-            .expect("validated manifests contribute a theme or provider")
+            .expect("validated manifests contribute a theme, view or provider")
             .contribution;
         let message = if self.inner.targets.is_empty() {
             "provider plugins are not supported on this platform".into()
@@ -1652,6 +1692,16 @@ impl PluginManager {
                 files.push((theme.css.as_str(), PackageFile::Css));
             }
         }
+        for view in &package.manifest.contributes.views {
+            if seen.insert(view.script.as_str()) {
+                files.push((view.script.as_str(), PackageFile::Script));
+            }
+            if let Some(css) = &view.css
+                && seen.insert(css.as_str())
+            {
+                files.push((css.as_str(), PackageFile::Css));
+            }
+        }
         for font in &package.manifest.contributes.fonts {
             if seen.insert(font.file.as_str()) {
                 files.push((font.file.as_str(), PackageFile::Font));
@@ -1668,16 +1718,26 @@ impl PluginManager {
         for (file, kind) in files {
             let limit = match kind {
                 PackageFile::Css => CSS_FILE_LIMIT,
+                PackageFile::Script => SCRIPT_FILE_LIMIT,
                 PackageFile::Font => FONT_FILE_LIMIT,
                 PackageFile::Icon => ICON_FILE_LIMIT,
             };
-            let bytes = self
-                .fetch_bounded(
+            let bytes = if let Some(view) = package.views.iter().find(|view| view.file == file) {
+                self.fetch_view_asset(repository, package.tag.as_deref(), view, limit)
+                    .await?
+            } else {
+                let missing = if view_files(&package.manifest).any(|view| view == file) {
+                    MissingResponse::ViewFile(file.to_owned())
+                } else {
+                    MissingResponse::PackageFile(file.to_owned())
+                };
+                self.fetch_bounded(
                     self.raw_url(repository, &package.commit, file),
                     limit,
-                    MissingResponse::PackageFile(file.to_owned()),
+                    missing,
                 )
-                .await?;
+                .await?
+            };
             match kind {
                 PackageFile::Font if !bytes.starts_with(b"wOF2") => {
                     return Err(PluginInstallError::invalid_package(format!(
@@ -1721,6 +1781,32 @@ impl PluginManager {
                 .await?;
         }
         Ok(())
+    }
+
+    async fn fetch_view_asset(
+        &self,
+        repository: &Repository,
+        tag: Option<&str>,
+        view: &LockedViewAsset,
+        limit: usize,
+    ) -> Result<Vec<u8>, PluginInstallError> {
+        let tag = tag.ok_or_else(|| {
+            PluginInstallError::invalid_package("view release assets require a release")
+        })?;
+        let bytes = self
+            .fetch_bounded(
+                self.release_asset_url(repository, tag, view.asset()),
+                limit,
+                MissingResponse::ReleaseAsset(view.asset().to_owned()),
+            )
+            .await?;
+        if sha256_hex(&bytes) != view.sha256 {
+            return Err(PluginInstallError::invalid_package(format!(
+                "release asset {:?} does not match its sha256 digest",
+                view.asset()
+            )));
+        }
+        Ok(bytes)
     }
 
     /// Verify the archive against its digest before reading it, then extract
@@ -1832,6 +1918,10 @@ impl PluginManager {
                 ),
                 MissingResponse::PackageFile(path) => PluginInstallError::invalid_package(format!(
                     "plugin reference does not contain {path:?}"
+                )),
+                MissingResponse::ViewFile(path) => PluginInstallError::invalid_package(format!(
+                    "{path:?} is not in the repository or a release; publish a release with {:?} attached",
+                    view_asset_name(&path)
                 )),
                 MissingResponse::ReleaseAsset(name) => PluginInstallError::new(
                     PluginInstallErrorKind::MissingRelease,
@@ -2089,6 +2179,55 @@ fn release_asset(
         asset: asset.name.clone(),
         sha256,
     }))
+}
+
+/// Each view's `script` and `css` path, in manifest order.
+fn view_files(manifest: &PluginManifest) -> impl Iterator<Item = &str> {
+    manifest
+        .contributes
+        .views
+        .iter()
+        .flat_map(|view| std::iter::once(view.script.as_str()).chain(view.css.as_deref()))
+}
+
+/// Match view files to the release assets of the same file name. Files without
+/// an asset come from the release commit; an asset without a digest is a
+/// broken release, never an unverified download.
+fn release_view_assets(
+    release: &GithubRelease,
+    manifest: &PluginManifest,
+) -> Result<Vec<LockedViewAsset>, PluginInstallError> {
+    let mut views: Vec<LockedViewAsset> = Vec::new();
+    for file in view_files(manifest) {
+        if views.iter().any(|view| view.file == file) {
+            continue;
+        }
+        let name = view_asset_name(file);
+        let Some(asset) = release.assets.iter().find(|asset| asset.name == name) else {
+            continue;
+        };
+        if let Some(other) = views.iter().find(|view| view.asset() == name) {
+            return Err(PluginInstallError::invalid_package(format!(
+                "release asset {name:?} could be {:?} or {file:?}; give view files distinct names",
+                other.file
+            )));
+        }
+        let sha256 = asset
+            .digest
+            .as_deref()
+            .and_then(release_asset_sha256)
+            .ok_or_else(|| {
+                PluginInstallError::invalid_package(format!(
+                    "release {} asset {:?} has no sha256 digest",
+                    release.tag_name, asset.name
+                ))
+            })?;
+        views.push(LockedViewAsset {
+            file: file.to_owned(),
+            sha256,
+        });
+    }
+    Ok(views)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -2818,6 +2957,338 @@ appearance = "dark"
     }
 
     #[tokio::test]
+    async fn installs_view_scripts_and_styles() {
+        let manifest = r#"id = "alice.board"
+name = "Board"
+description = "A board view"
+min_rencal_version = "0.8.0"
+
+[[contributes.views]]
+id = "board"
+name = "Board"
+script = "dist/board.js"
+css = "dist/board.css"
+"#;
+        let downloader = Arc::new(FixtureDownloader::new());
+        downloader.set(
+            "/repos/Alice/rencal-board/commits?per_page=1",
+            200,
+            format!(r#"[{{"sha":"{COMMIT_V1}"}}]"#).into_bytes(),
+        );
+        downloader.set(
+            &format!("/Alice/rencal-board/{COMMIT_V1}/rencal-plugin.toml"),
+            200,
+            manifest.as_bytes().to_vec(),
+        );
+        downloader.set(
+            &format!("/Alice/rencal-board/{COMMIT_V1}/dist/board.js"),
+            200,
+            b"export default () => null".to_vec(),
+        );
+        downloader.set(
+            &format!("/Alice/rencal-board/{COMMIT_V1}/dist/board.css"),
+            200,
+            b".board {}".to_vec(),
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let manager = manager(&temp, downloader);
+
+        let inspection = manager.install("Alice/rencal-board").await.unwrap();
+
+        assert_eq!(
+            inspection.views,
+            [PluginViewInspection {
+                id: "board".into(),
+                name: "Board".into(),
+            }]
+        );
+        let package = temp.path().join("data/plugins/alice.board");
+        assert_eq!(
+            std::fs::read_to_string(package.join("dist/board.js")).unwrap(),
+            "export default () => null"
+        );
+        assert_eq!(
+            std::fs::read_to_string(package.join("dist/board.css")).unwrap(),
+            ".board {}"
+        );
+        assert_eq!(
+            manager.list().await.plugins[0].contributions,
+            [ContributionKind::View]
+        );
+    }
+
+    const BOARD_REPO: &str = "Alice/rencal-board";
+
+    const BOARD_MANIFEST: &str = r#"id = "alice.board"
+name = "Board"
+description = "A board view"
+min_rencal_version = "0.8.0"
+
+[[contributes.views]]
+id = "board"
+name = "Board"
+script = "dist/board.js"
+css = "dist/board.css"
+"#;
+
+    /// Serve a release of the board plugin whose commit holds `files` and
+    /// whose assets are `(name, bytes)` pairs with their digests.
+    fn serve_board_release(
+        downloader: &FixtureDownloader,
+        commit: &str,
+        tag: &str,
+        manifest: &str,
+        files: &[(&str, &[u8])],
+        assets: &[(&str, &[u8])],
+    ) {
+        let release_assets: Vec<_> = assets
+            .iter()
+            .map(|(name, bytes)| {
+                serde_json::json!({
+                    "name": name,
+                    "digest": format!("sha256:{}", sha256_hex(bytes)),
+                })
+            })
+            .collect();
+        downloader.set(
+            &format!("/repos/{BOARD_REPO}/releases/latest"),
+            200,
+            serde_json::to_vec(&serde_json::json!({ "tag_name": tag, "assets": release_assets }))
+                .unwrap(),
+        );
+        downloader.set(
+            &format!("/repos/{BOARD_REPO}/commits?sha={tag}&per_page=1"),
+            200,
+            format!(r#"[{{"sha":"{commit}"}}]"#),
+        );
+        downloader.set(
+            &format!("/{BOARD_REPO}/{commit}/rencal-plugin.toml"),
+            200,
+            manifest,
+        );
+        for (path, bytes) in files {
+            downloader.set(&format!("/{BOARD_REPO}/{commit}/{path}"), 200, *bytes);
+        }
+        for (name, bytes) in assets {
+            downloader.set(
+                &format!("/{BOARD_REPO}/releases/download/{tag}/{name}"),
+                200,
+                *bytes,
+            );
+        }
+    }
+
+    fn board_package(temp: &tempfile::TempDir) -> PathBuf {
+        temp.path().join("data/plugins/alice.board")
+    }
+
+    #[tokio::test]
+    async fn installs_view_files_from_release_assets_and_restores_them() {
+        let downloader = Arc::new(FixtureDownloader::new());
+        serve_board_release(
+            &downloader,
+            COMMIT_V1,
+            "v1.0.0",
+            BOARD_MANIFEST,
+            &[],
+            &[("board.js", b"export default 1"), ("board.css", b".v1 {}")],
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let manager = manager(&temp, downloader.clone());
+
+        let inspection = manager.install(BOARD_REPO).await.unwrap();
+
+        assert_eq!(inspection.version, "v1.0.0");
+        assert_eq!(
+            std::fs::read_to_string(board_package(&temp).join("dist/board.js")).unwrap(),
+            "export default 1"
+        );
+        assert_eq!(
+            std::fs::read_to_string(board_package(&temp).join("dist/board.css")).unwrap(),
+            ".v1 {}"
+        );
+        assert_eq!(
+            locked_plugins(&temp)[0].views,
+            [
+                LockedViewAsset {
+                    file: "dist/board.js".into(),
+                    sha256: sha256_hex(b"export default 1"),
+                },
+                LockedViewAsset {
+                    file: "dist/board.css".into(),
+                    sha256: sha256_hex(b".v1 {}"),
+                },
+            ]
+        );
+
+        // A newer release must not leak into a restore of the locked one.
+        serve_board_release(
+            &downloader,
+            COMMIT_V2,
+            "v2.0.0",
+            BOARD_MANIFEST,
+            &[],
+            &[("board.js", b"export default 2"), ("board.css", b".v2 {}")],
+        );
+        std::fs::remove_dir_all(board_package(&temp)).unwrap();
+        assert!(manager.reconcile().await.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(board_package(&temp).join("dist/board.js")).unwrap(),
+            "export default 1"
+        );
+
+        std::fs::remove_dir_all(board_package(&temp)).unwrap();
+        downloader.set(
+            &format!("/{BOARD_REPO}/releases/download/v1.0.0/board.js"),
+            200,
+            b"replaced".to_vec(),
+        );
+        let errors = manager.reconcile().await;
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("sha256 digest"), "{errors:?}");
+        assert!(!board_package(&temp).exists());
+    }
+
+    #[tokio::test]
+    async fn view_files_without_a_release_asset_come_from_the_release_commit() {
+        let downloader = Arc::new(FixtureDownloader::new());
+        serve_board_release(
+            &downloader,
+            COMMIT_V1,
+            "v1.0.0",
+            BOARD_MANIFEST,
+            &[("dist/board.css", b".committed {}")],
+            &[("board.js", b"export default 1")],
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let manager = manager(&temp, downloader);
+
+        manager.install(BOARD_REPO).await.unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(board_package(&temp).join("dist/board.css")).unwrap(),
+            ".committed {}"
+        );
+        let locks = locked_plugins(&temp);
+        assert_eq!(locks[0].views.len(), 1);
+        assert_eq!(locks[0].views[0].file, "dist/board.js");
+    }
+
+    #[tokio::test]
+    async fn view_asset_digest_mismatch_keeps_the_installed_view() {
+        let downloader = Arc::new(FixtureDownloader::new());
+        serve_board_release(
+            &downloader,
+            COMMIT_V1,
+            "v1.0.0",
+            BOARD_MANIFEST,
+            &[],
+            &[("board.js", b"export default 1"), ("board.css", b".v1 {}")],
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let manager = manager(&temp, downloader.clone());
+        manager.install(BOARD_REPO).await.unwrap();
+
+        serve_board_release(
+            &downloader,
+            COMMIT_V2,
+            "v2.0.0",
+            BOARD_MANIFEST,
+            &[],
+            &[("board.js", b"export default 2"), ("board.css", b".v2 {}")],
+        );
+        downloader.set(
+            &format!("/{BOARD_REPO}/releases/download/v2.0.0/board.js"),
+            200,
+            b"tampered".to_vec(),
+        );
+
+        let error = manager.install(BOARD_REPO).await.unwrap_err();
+        assert_eq!(error.kind, PluginInstallErrorKind::InvalidPackage);
+        assert!(error.to_string().contains("sha256 digest"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(board_package(&temp).join("dist/board.js")).unwrap(),
+            "export default 1"
+        );
+        assert_eq!(locked_plugins(&temp)[0].tag.as_deref(), Some("v1.0.0"));
+    }
+
+    #[tokio::test]
+    async fn rejects_view_assets_without_a_digest_or_with_ambiguous_names() {
+        let downloader = Arc::new(FixtureDownloader::new());
+        serve_board_release(&downloader, COMMIT_V1, "v1.0.0", BOARD_MANIFEST, &[], &[]);
+        downloader.set(
+            &format!("/repos/{BOARD_REPO}/releases/latest"),
+            200,
+            r#"{"tag_name":"v1.0.0","assets":[{"name":"board.js","digest":null}]}"#,
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let manager = manager(&temp, downloader.clone());
+
+        let error = manager.inspect(BOARD_REPO).await.unwrap_err();
+        assert!(
+            error.to_string().contains("has no sha256 digest"),
+            "{error}"
+        );
+
+        let manifest = r#"id = "alice.board"
+name = "Board"
+description = "Two boards"
+min_rencal_version = "0.8.0"
+
+[[contributes.views]]
+id = "week"
+name = "Week"
+script = "dist/week/index.js"
+
+[[contributes.views]]
+id = "month"
+name = "Month"
+script = "dist/month/index.js"
+"#;
+        serve_board_release(
+            &downloader,
+            COMMIT_V1,
+            "v1.0.0",
+            manifest,
+            &[],
+            &[("index.js", b"export default 1")],
+        );
+
+        let error = manager.inspect(BOARD_REPO).await.unwrap_err();
+        assert!(error.to_string().contains("distinct names"), "{error}");
+        assert!(manager.install(BOARD_REPO).await.is_err());
+        assert!(!board_package(&temp).exists());
+    }
+
+    #[tokio::test]
+    async fn missing_view_files_point_to_release_assets() {
+        let downloader = Arc::new(FixtureDownloader::new());
+        downloader.set(
+            &format!("/repos/{BOARD_REPO}/commits?per_page=1"),
+            200,
+            format!(r#"[{{"sha":"{COMMIT_V1}"}}]"#).into_bytes(),
+        );
+        downloader.set(
+            &format!("/{BOARD_REPO}/{COMMIT_V1}/rencal-plugin.toml"),
+            200,
+            BOARD_MANIFEST,
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let manager = manager(&temp, downloader);
+
+        let error = manager.install(BOARD_REPO).await.unwrap_err();
+
+        assert_eq!(error.kind, PluginInstallErrorKind::InvalidPackage);
+        assert!(
+            error
+                .to_string()
+                .contains(r#"publish a release with "board.js" attached"#),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
     async fn accepts_release_metadata_with_long_notes() {
         let downloader = Arc::new(FixtureDownloader::new());
         let release = format!(
@@ -2909,6 +3380,7 @@ appearance = "dark"
                     commit: COMMIT_V1.into(),
                     tag: None,
                     providers: Vec::new(),
+                    views: Vec::new(),
                 }],
                 local: Vec::new(),
             },
@@ -3384,6 +3856,7 @@ appearance = "dark"
                 commit: COMMIT_V1.into(),
                 tag: None,
                 providers: Vec::new(),
+                views: Vec::new(),
             }],
             local: vec![LocalLockEntry {
                 id: "bob.dawn".into(),

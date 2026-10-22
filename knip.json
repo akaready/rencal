@@ -1,5 +1,6 @@
 {
   "ignoreExportsUsedInFile": true,
+  "entry": ["src/sdk/index.ts"],
   "ignore": ["src/components/ui/**", "website/**", "scripts/**", "src/themes/*.css"],
   "ignoreDependencies": ["prettier-plugin-astro"],
   "ignoreIssues": {

@@ -1,3 +1,4 @@
 src/rpc/bindings.ts
 src/rpc/events.generated.ts
 pnpm-lock.yaml
+packages/sdk/index.d.ts
